@@ -8,6 +8,7 @@ from app import VoiceMindAI, create_voicemind_instance
 from prompt import get_prompt_by_style
 import time
 import pygame
+import numpy as np
 
 # Page configuration
 st.set_page_config(
@@ -285,50 +286,149 @@ def voice_chat_interface():
         )
         
         if uploaded_audio and st.button("🚀 Process Audio File", type="primary", use_container_width=True):
-            process_voice_input(uploaded_audio)
+            process_voice_input(uploaded_audio, recording_mode="file_upload")
     
     # Display conversation history
     display_conversation_history()
 
-def process_voice_input(uploaded_audio):
-    """Process the uploaded voice input through VoiceMind AI (original file upload method)"""
+def process_voice_input(uploaded_audio, recording_mode="file_upload", duration=10):
+    """Process the uploaded voice input through VoiceMind AI (original file upload method or live modes)"""
     
-    with st.spinner("🎯 Processing your voice journal..."):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+    if recording_mode == "file_upload":
+        with st.spinner("🎯 Processing your voice journal..."):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            try:
+                # Step 1: Save uploaded file
+                status_text.text("📁 Saving audio file...")
+                progress_bar.progress(10)
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+                    tmp_file.write(uploaded_audio.read())
+                    temp_audio_path = tmp_file.name
+                
+                # Step 2: Process through VoiceMind AI
+                status_text.text("🧠 Analyzing with VoiceMind AI...")
+                progress_bar.progress(30)
+                
+                support_style = st.session_state.user_profile.get("support_style", "mental_health")
+                result = st.session_state.ai_instance.process_voice_conversation(
+                    audio_path=temp_audio_path,
+                    support_style=support_style
+                )
+                
+                progress_bar.progress(80)
+                status_text.text("✅ Processing complete!")
+                
+                # Clean up temp file
+                os.unlink(temp_audio_path)
+                
+                progress_bar.progress(100)
+                time.sleep(0.5)  # Brief pause for UX
+                progress_bar.empty()
+                status_text.empty()
+                
+                if result["success"]:
+                    # Add to chat history
+                    chat_entry = {
+                        "timestamp": datetime.now(),
+                        "user_audio_transcript": result["transcript"],
+                        "ai_response": result["ai_response"],
+                        "emotion_analysis": result["emotion_analysis"],
+                        "response_audio_path": result["response_audio_path"],
+                        "mental_tools": result.get("mental_tools", []),
+                        "crisis_detected": result.get("crisis_detected", False),
+                        "bullying_detected": result.get("bullying_detected", False),
+                        "recording_mode": "file_upload"
+                    }
+                    
+                    st.session_state.chat_history.append(chat_entry)
+                    
+                    # Show success message
+                    st.success("✅ Voice conversation processed successfully!")
+                    
+                    # Handle crisis situations
+                    if result.get("crisis_detected"):
+                        display_crisis_alert()
+                    elif result.get("bullying_detected"):
+                        display_bullying_alert()
+                    
+                    # Auto-play AI response
+                    st.info("🎵 Playing AI response...")
+                    
+                else:
+                    st.error(f"❌ Processing failed: {result.get('error', 'Unknown error')}")
+                    
+            except Exception as e:
+                progress_bar.empty()
+                status_text.empty()
+                st.error(f"❌ Error during voice processing: {str(e)}")
+    else:
+        # Start live recording based on selected mode
+        status_placeholder = st.empty()
+        progress_placeholder = st.empty()
+        
+        def recording_callback(status, data=None):
+            """Callback for real-time recording updates"""
+            if status == "recording_started":
+                status_placeholder.success("🎤 Recording started! Speak now...")
+            elif status == "recording":
+                if data and "duration" in data:
+                    progress_placeholder.progress(min(data["duration"] / 10, 1.0))
+            elif status == "silence_detected":
+                status_placeholder.info("🔇 Silence detected, processing...")
+            elif status == "recording_complete":
+                status_placeholder.success("✅ Recording complete!")
+                progress_placeholder.empty()
+            elif status == "recording_error":
+                status_placeholder.error(f"❌ Recording failed: {data.get('error', 'Unknown error')}")
+        
+        def conversation_callback(status, data=None):
+            """Callback for conversation processing updates"""
+            if status == "conversation_started":
+                status_placeholder.info("🚀 Starting live conversation...")
+            elif status == "processing_started":
+                status_placeholder.info("🧠 Processing with AI...")
+            elif status == "processing_complete":
+                status_placeholder.success("✅ AI processing complete!")
+            elif status == "playing_response":
+                status_placeholder.info("🎵 Playing AI response...")
+            elif status == "response_played":
+                status_placeholder.success("✅ Conversation complete!")
+            elif status == "conversation_error":
+                status_placeholder.error(f"❌ Conversation failed: {data.get('error', 'Unknown error')}")
         
         try:
-            # Step 1: Save uploaded file
-            status_text.text("📁 Saving audio file...")
-            progress_bar.progress(10)
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-                tmp_file.write(uploaded_audio.read())
-                temp_audio_path = tmp_file.name
-            
-            # Step 2: Process through VoiceMind AI
-            status_text.text("🧠 Analyzing with VoiceMind AI...")
-            progress_bar.progress(30)
-            
             support_style = st.session_state.user_profile.get("support_style", "mental_health")
-            result = st.session_state.ai_instance.process_voice_conversation(
-                audio_path=temp_audio_path,
-                support_style=support_style
-            )
             
-            progress_bar.progress(80)
-            status_text.text("✅ Processing complete!")
+            if recording_mode == "live_auto":
+                # Auto voice detection recording
+                result = st.session_state.ai_instance.start_live_conversation(
+                    support_style=support_style,
+                    callback=conversation_callback
+                )
+            else:
+                # Push-to-talk recording
+                status_placeholder.info(f"🎤 Recording for {duration} seconds...")
+                audio_file = st.session_state.ai_instance.record_push_to_talk(duration)
+                
+                status_placeholder.info("🧠 Processing with AI...")
+                result = st.session_state.ai_instance.process_voice_conversation(audio_file, support_style)
+                
+                if result["success"]:
+                    status_placeholder.info("🎵 Playing AI response...")
+                    st.session_state.ai_instance.play_audio(result["response_audio_path"])
+                    status_placeholder.success("✅ Conversation complete!")
+                
+                # Clean up
+                try:
+                    os.remove(audio_file)
+                except:
+                    pass
             
-            # Clean up temp file
-            os.unlink(temp_audio_path)
-            
-            progress_bar.progress(100)
-            time.sleep(0.5)  # Brief pause for UX
-            progress_bar.empty()
-            status_text.empty()
-            
+            # Add to chat history if successful
             if result["success"]:
-                # Add to chat history
                 chat_entry = {
                     "timestamp": datetime.now(),
                     "user_audio_transcript": result["transcript"],
@@ -338,14 +438,11 @@ def process_voice_input(uploaded_audio):
                     "mental_tools": result.get("mental_tools", []),
                     "crisis_detected": result.get("crisis_detected", False),
                     "bullying_detected": result.get("bullying_detected", False),
-                    "recording_mode": chat.get("recording_mode", "unknown"),
-                    "recording_mode": "file_upload"
+                    "conversation_id": result.get("conversation_id", ""),
+                    "recording_mode": recording_mode
                 }
                 
                 st.session_state.chat_history.append(chat_entry)
-                
-                # Show success message
-                st.success("✅ Voice conversation processed successfully!")
                 
                 # Handle crisis situations
                 if result.get("crisis_detected"):
@@ -353,110 +450,13 @@ def process_voice_input(uploaded_audio):
                 elif result.get("bullying_detected"):
                     display_bullying_alert()
                 
-                # Auto-play AI response
-                st.info("🎵 Playing AI response...")
-                
-            else:
-                st.error(f"❌ Processing failed: {result.get('error', 'Unknown error')}")
-                
+                # Clear status after delay
+                time.sleep(2)
+                status_placeholder.empty()
+                progress_placeholder.empty()
+            
         except Exception as e:
-            progress_bar.empty()
-            status_text.empty()
-            st.error(f"❌ Error during voice processing: {str(e)}")
-    """Start live recording based on selected mode"""
-    
-    # Create placeholders for real-time updates
-    status_placeholder = st.empty()
-    progress_placeholder = st.empty()
-    
-    def recording_callback(status, data=None):
-        """Callback for real-time recording updates"""
-        if status == "recording_started":
-            status_placeholder.success("🎤 Recording started! Speak now...")
-        elif status == "recording":
-            if data and "duration" in data:
-                progress_placeholder.progress(min(data["duration"] / 10, 1.0))
-        elif status == "silence_detected":
-            status_placeholder.info("🔇 Silence detected, processing...")
-        elif status == "recording_complete":
-            status_placeholder.success("✅ Recording complete!")
-            progress_placeholder.empty()
-        elif status == "recording_error":
-            status_placeholder.error(f"❌ Recording failed: {data.get('error', 'Unknown error')}")
-    
-    def conversation_callback(status, data=None):
-        """Callback for conversation processing updates"""
-        if status == "conversation_started":
-            status_placeholder.info("🚀 Starting live conversation...")
-        elif status == "processing_started":
-            status_placeholder.info("🧠 Processing with AI...")
-        elif status == "processing_complete":
-            status_placeholder.success("✅ AI processing complete!")
-        elif status == "playing_response":
-            status_placeholder.info("🎵 Playing AI response...")
-        elif status == "response_played":
-            status_placeholder.success("✅ Conversation complete!")
-        elif status == "conversation_error":
-            status_placeholder.error(f"❌ Conversation failed: {data.get('error', 'Unknown error')}")
-    
-    try:
-        support_style = st.session_state.user_profile.get("support_style", "mental_health")
-        
-        if recording_mode == "live_auto":
-            # Auto voice detection recording
-            result = st.session_state.ai_instance.start_live_conversation(
-                support_style=support_style,
-                callback=conversation_callback
-            )
-        else:
-            # Push-to-talk recording
-            status_placeholder.info(f"🎤 Recording for {duration} seconds...")
-            audio_file = st.session_state.ai_instance.record_push_to_talk(duration)
-            
-            status_placeholder.info("🧠 Processing with AI...")
-            result = st.session_state.ai_instance.process_voice_conversation(audio_file, support_style)
-            
-            if result["success"]:
-                status_placeholder.info("🎵 Playing AI response...")
-                st.session_state.ai_instance.play_audio(result["response_audio_path"])
-                status_placeholder.success("✅ Conversation complete!")
-            
-            # Clean up
-            try:
-                os.remove(audio_file)
-            except:
-                pass
-        
-        # Add to chat history if successful
-        if result["success"]:
-            chat_entry = {
-                "timestamp": datetime.now(),
-                "user_audio_transcript": result["transcript"],
-                "ai_response": result["ai_response"],
-                "emotion_analysis": result["emotion_analysis"],
-                "response_audio_path": result["response_audio_path"],
-                "mental_tools": result.get("mental_tools", []),
-                "crisis_detected": result.get("crisis_detected", False),
-                "bullying_detected": result.get("bullying_detected", False),
-                "conversation_id": result.get("conversation_id", ""),
-                "recording_mode": recording_mode
-            }
-            
-            st.session_state.chat_history.append(chat_entry)
-            
-            # Handle crisis situations
-            if result.get("crisis_detected"):
-                display_crisis_alert()
-            elif result.get("bullying_detected"):
-                display_bullying_alert()
-            
-            # Clear status after delay
-            time.sleep(2)
-            status_placeholder.empty()
-            progress_placeholder.empty()
-        
-    except Exception as e:
-        status_placeholder.error(f"❌ Live recording failed: {str(e)}")
+            status_placeholder.error(f"❌ Live recording failed: {str(e)}")
 
 def test_microphone():
     """Test microphone functionality"""
@@ -499,77 +499,6 @@ def test_microphone():
         st.write("2. Install: `pip install pyaudio`")
         st.write("3. On macOS: `brew install portaudio`")
         st.write("4. On Ubuntu: `sudo apt install python3-pyaudio`")
-    """Process the uploaded voice input through VoiceMind AI"""
-    
-    with st.spinner("🎯 Processing your voice journal..."):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        try:
-            # Step 1: Save uploaded file
-            status_text.text("📁 Saving audio file...")
-            progress_bar.progress(10)
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-                tmp_file.write(uploaded_audio.read())
-                temp_audio_path = tmp_file.name
-            
-            # Step 2: Process through VoiceMind AI
-            status_text.text("🧠 Analyzing with VoiceMind AI...")
-            progress_bar.progress(30)
-            
-            support_style = st.session_state.user_profile.get("support_style", "mental_health")
-            result = st.session_state.ai_instance.process_voice_conversation(
-                audio_path=temp_audio_path,
-                support_style=support_style
-            )
-            
-            progress_bar.progress(80)
-            status_text.text("✅ Processing complete!")
-            
-            # Clean up temp file
-            os.unlink(temp_audio_path)
-            
-            progress_bar.progress(100)
-            time.sleep(0.5)  # Brief pause for UX
-            progress_bar.empty()
-            status_text.empty()
-            
-            if result["success"]:
-                # Add to chat history
-                chat_entry = {
-                    "timestamp": datetime.now(),
-                    "user_audio_transcript": result["transcript"],
-                    "ai_response": result["ai_response"],
-                    "emotion_analysis": result["emotion_analysis"],
-                    "response_audio_path": result["response_audio_path"],
-                    "mental_tools": result.get("mental_tools", []),
-                    "crisis_detected": result.get("crisis_detected", False),
-                    "bullying_detected": result.get("bullying_detected", False),
-                    "conversation_id": result.get("conversation_id", "")
-                }
-                
-                st.session_state.chat_history.append(chat_entry)
-                
-                # Show success message
-                st.success("✅ Voice conversation processed successfully!")
-                
-                # Handle crisis situations
-                if result.get("crisis_detected"):
-                    display_crisis_alert()
-                elif result.get("bullying_detected"):
-                    display_bullying_alert()
-                
-                # Auto-play AI response
-                st.info("🎵 Playing AI response...")
-                
-            else:
-                st.error(f"❌ Processing failed: {result.get('error', 'Unknown error')}")
-                
-        except Exception as e:
-            progress_bar.empty()
-            status_text.empty()
-            st.error(f"❌ Error during voice processing: {str(e)}")
 
 def display_conversation_history():
     """Display the conversation history in chat format"""
