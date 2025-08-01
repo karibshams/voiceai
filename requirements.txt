@@ -1,0 +1,9 @@
+streamlit
+openai>=0.27.0
+python-dotenv
+httpx
+pyaudio==0.2.11
+gtts==2.2.3
+numpy==1.23.5
+uuid==1.30
+pillow==8.4.0
