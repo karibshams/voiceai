@@ -222,7 +222,48 @@ def voice_chat_interface():
         
         with col1:
             if st.button("🔴 Start Recording", type="primary", use_container_width=True):
-                start_live_recording(recording_mode, ptt_duration)
+                # Call the live recording logic directly
+                if recording_mode == "live_auto":
+                    # Auto voice detection recording
+                    support_style = st.session_state.user_profile.get("support_style", "mental_health")
+                    result = st.session_state.ai_instance.start_live_conversation(
+                        support_style=support_style,
+                        callback=None  # You can implement a callback if needed
+                    )
+                else:
+                    # Push-to-talk recording
+                    support_style = st.session_state.user_profile.get("support_style", "mental_health")
+                    st.info(f"🎤 Recording for {ptt_duration} seconds...")
+                    audio_file = st.session_state.ai_instance.record_push_to_talk(ptt_duration)
+                    st.info("🧠 Processing with AI...")
+                    result = st.session_state.ai_instance.process_voice_conversation(audio_file, support_style)
+                    if result["success"]:
+                        st.info("🎵 Playing AI response...")
+                        st.session_state.ai_instance.play_audio(result["response_audio_path"])
+                        st.success("✅ Conversation complete!")
+                    try:
+                        os.remove(audio_file)
+                    except:
+                        pass
+                # Add to chat history if successful
+                if result["success"]:
+                    chat_entry = {
+                        "timestamp": datetime.now(),
+                        "user_audio_transcript": result["transcript"],
+                        "ai_response": result["ai_response"],
+                        "emotion_analysis": result["emotion_analysis"],
+                        "response_audio_path": result["response_audio_path"],
+                        "mental_tools": result.get("mental_tools", []),
+                        "crisis_detected": result.get("crisis_detected", False),
+                        "bullying_detected": result.get("bullying_detected", False),
+                        "conversation_id": result.get("conversation_id", ""),
+                        "recording_mode": recording_mode
+                    }
+                    st.session_state.chat_history.append(chat_entry)
+                    if result.get("crisis_detected"):
+                        display_crisis_alert()
+                    elif result.get("bullying_detected"):
+                        display_bullying_alert()
         
         with col2:
             if st.button("⏹️ Stop Recording", use_container_width=True):
